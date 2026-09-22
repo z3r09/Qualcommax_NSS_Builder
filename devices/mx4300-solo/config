@@ -1,0 +1,355 @@
+################################################################################
+# Linksys MX4300 (IPQ807x, 2GB RAM) — single-device NSS build
+# Base: JuliusBairaktaris/Qualcommax_NSS_Builder
+#       (devices/common/config + devices/ipq807x-1g/config), merged with your
+#       original default.config after review. See chat for the full rationale
+#       behind every change — short version in the comments below.
+#
+# HOW TO BUILD (recommended path — avoids the macOS/mold problem entirely):
+#   1. Fork https://github.com/JuliusBairaktaris/Qualcommax_NSS_Builder
+#   2. Replace the contents of devices/ipq807x-1g/config with this file, OR
+#      add a new devices/mx4300-solo/ dir with this file and add
+#      "mx4300-solo" to the `matrix.device` list in .github/workflows/build.yml
+#   3. Push — GitHub Actions (Ubuntu runners) builds it. Toolchain matches
+#      exactly what the NSS kernel glue was tested against; no local host
+#      build tooling needed at all.
+#
+#   If you build locally anyway: do it inside a Linux VM or Docker container,
+#   not directly on macOS — OpenWrt's buildroot does not support a macOS host
+#   regardless of linker choice. Inside that VM/container, mold works fine.
+#
+#   Also required, not a .config symbol: add to feeds.conf before
+#   `./scripts/feeds update -a`:
+#     src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;edma-nss
+#
+# SINGLE-DEVICE NOTE: CONFIG_TARGET_MULTI_PROFILE and
+# CONFIG_TARGET_PER_DEVICE_ROOTFS are deliberately NOT set — those exist only
+# to support the repo's 9-device ipq807x-1g group image. Leaving them out lets
+# the single-profile choice symbol activate, which is what makes kmod-ath11k
+# auto-select the correct per-board firmware profile for just this device.
+#
+# MESH NOTE: 802.11s mesh is intentionally NOT enabled. You confirmed Ethernet
+# can reach every unit, so the plan is wired backhaul + same-SSID "dumb AP"
+# units + usteer for client roaming — not wireless mesh. This keeps you on NSS
+# firmware 12.5 (mesh needs the older 11.4 line) with full NSS offload on
+# every unit's link. Happy to help write the dumb-AP uci-defaults for the
+# other 4 units once you tell me which unit stays the router/DHCP server and
+# your LAN IP scheme.
+################################################################################
+
+################################################################################
+# 🧰 General Build Settings
+################################################################################
+CONFIG_BUILD_PATENTED=y
+CONFIG_BUSYBOX_DEFAULT_PIE=y
+CONFIG_DEVEL=y
+CONFIG_EXPERIMENTAL=y
+CONFIG_USE_GC_SECTIONS=y
+CONFIG_TARGET_OPTIONS=y
+CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=cortex-a53"
+CONFIG_ZLIB_OPTIMIZE_SPEED=y
+CONFIG_ZSTD_OPTIMIZE_O3=y
+# CONFIG_PACKAGE_autocore removed: it's from the lean/immortalwrt "emortal"
+# package set, not mainline OpenWrt or this repo's NSS feed. Ask if you want
+# it back — it needs an extra feed line, not just a symbol.
+# CONFIG_CCACHE is not set   # repo's own reasoning: no-op without persistent
+                              # cache storage; if building locally with a real
+                              # persistent ccache dir, re-enable freely.
+
+################################################################################
+# 🧠 Toolchain Settings — matches repo exactly (GCC + mold + LTO)
+################################################################################
+CONFIG_TOOLCHAINOPTS=y
+CONFIG_BINUTILS_USE_VERSION_2_46=y
+CONFIG_GCC_USE_VERSION_15=y
+CONFIG_USE_LTO=y
+CONFIG_USE_MOLD=y
+CONFIG_GCC_DEFAULT_PIE=y
+CONFIG_GCC_DEFAULT_SSP=y
+
+# --- If you decide to build locally on macOS with your existing LLVM/lld
+#     toolchain instead (untested against this repo's NSS kmods — see chat),
+#     comment out the four lines above from BINUTILS_USE_VERSION_2_46 through
+#     GCC_DEFAULT_SSP and uncomment these instead:
+# CONFIG_BINUTILS_USE_VERSION_2_45=y
+# CONFIG_BINUTILS_VERSION="2.45"
+# CONFIG_BINUTILS_VERSION_2_45=y
+# CONFIG_GCC_VERSION_15=y
+# CONFIG_LLVM=y
+# CONFIG_LLVM_DEFAULT_LINKER=lld
+# CONFIG_TOOLCHAIN_ALLOW_LLVM=y
+
+################################################################################
+# Build Hardening Options — repo's full set
+################################################################################
+CONFIG_PKG_CHECK_FORMAT_SECURITY=y
+CONFIG_KERNEL_CC_STACKPROTECTOR_STRONG=y
+CONFIG_KERNEL_STACKPROTECTOR_STRONG=y
+CONFIG_PKG_ASLR_PIE_ALL=y
+CONFIG_PKG_CC_STACKPROTECTOR_ALL=y
+CONFIG_PKG_CC_STACKPROTECTOR_STRONG=y
+CONFIG_PKG_FORTIFY_SOURCE_3=y
+CONFIG_PKG_RELRO_FULL=y
+CONFIG_USE_SECCOMP=y
+
+################################################################################
+# ⚙️ Target Platform: Qualcomm IPQ807x (Linksys MX4300) — single device
+################################################################################
+CONFIG_TARGET_qualcommax=y
+CONFIG_TARGET_qualcommax_ipq807x=y
+CONFIG_TARGET_DEVICE_qualcommax_ipq807x_DEVICE_linksys_mx4300=y
+CONFIG_ATH11K_MEM_PROFILE_1G=y
+CONFIG_NSS_MEM_PROFILE_HIGH=y
+CONFIG_NSS_FIRMWARE_VERSION_12_5=y
+# CONFIG_TARGET_ROOTFS_INITRAMFS is not set   # repo builds sysupgrade-only;
+                                                # there is no factory image for
+                                                # this NSS stack at all.
+
+################################################################################
+# 🧪 Kernel Features
+################################################################################
+CONFIG_KERNEL_PREEMPT_NONE=y
+CONFIG_KERNEL_PREEMPT_NONE_BUILD=y
+
+################################################################################
+# 🔐 SSH — OpenSSH instead of Dropbear (repo default)
+################################################################################
+CONFIG_PACKAGE_dropbear=n
+CONFIG_PACKAGE_openssh-moduli=y
+CONFIG_PACKAGE_openssh-server=y
+CONFIG_PACKAGE_openssh-sftp-server=y
+
+################################################################################
+# 🔐 Crypto & OpenSSL — OpenSSL everywhere, mbedTLS off, legacy ciphers dropped
+################################################################################
+CONFIG_OPENSSL_ENGINE=y
+CONFIG_OPENSSL_OPTIMIZE_SPEED=y
+CONFIG_OPENSSL_WITH_ASM=y
+CONFIG_OPENSSL_WITH_CHACHA_POLY1305=y
+CONFIG_OPENSSL_WITH_DEPRECATED=n
+CONFIG_OPENSSL_WITH_ERROR_MESSAGES=y
+CONFIG_OPENSSL_WITH_TLS13=y
+CONFIG_PACKAGE_libopenssl=y
+CONFIG_PACKAGE_libopenssl-oqsprovider=y
+# WHIRLPOOL / SRP / PSK / CMS dropped — legacy/rarely-needed ciphers, not
+# required for plain SSH-from-macOS-terminal use.
+
+CONFIG_LUA_ECO_MBEDTLS=n
+CONFIG_LUA_ECO_OPENSSL=y
+CONFIG_PACKAGE_apk-mbedtls=n
+CONFIG_PACKAGE_apk-openssl=y
+CONFIG_LIBCURL_MBEDTLS=n
+CONFIG_LIBCURL_OPENSSL=y
+CONFIG_LIBCURL_HTTP=y
+CONFIG_LIBCURL_NO_SMB="!"
+CONFIG_PACKAGE_libcurl=y
+CONFIG_PACKAGE_libustream-mbedtls=n
+CONFIG_PACKAGE_libustream-openssl=y
+CONFIG_PACKAGE_luci-ssl-openssl=y
+
+################################################################################
+# 🛡️ Firewall hardening
+################################################################################
+CONFIG_PACKAGE_luci-app-bcp38=y
+
+################################################################################
+# 🌐 Networking Protocols / Support
+################################################################################
+CONFIG_PACKAGE_gre=y
+CONFIG_PACKAGE_ip-full=y
+CONFIG_PACKAGE_ipset=y
+CONFIG_PACKAGE_ip6tables-nft=y
+CONFIG_PACKAGE_iptables-mod-conntrack-extra=y
+CONFIG_PACKAGE_iptables-mod-ipopt=y
+CONFIG_PACKAGE_iptables-nft=y
+CONFIG_PACKAGE_wireguard-tools=y
+CONFIG_PACKAGE_wpad-openssl=y
+CONFIG_PACKAGE_wpad-basic-mbedtls=n
+# igmpproxy: left disabled (matches repo default) — you don't have a routed
+# WAN multicast/IPTV source, so there's nothing for it to do.
+
+################################################################################
+# 📦 Package Feeds & Exclusions — matches repo's CUSTOMIZE.md pattern exactly
+################################################################################
+CONFIG_FEED_nss=n
+CONFIG_FEED_nss_packages=n
+CONFIG_FEED_sqm_scripts_nss=n
+
+################################################################################
+# 📡 Wireless / Wi-Fi
+################################################################################
+CONFIG_ATH11K_DEBUGFS_HTT_STATS=n
+CONFIG_ATH11K_DEBUGFS_STA=y
+CONFIG_PACKAGE_MAC80211_NSS_SUPPORT=y
+CONFIG_ATH11K_NSS_SUPPORT=y
+CONFIG_ATH11K_THERMAL=n
+CONFIG_MAC80211_NSS_SUPPORT=y
+# Mesh symbols intentionally omitted (see header note): no
+# CONFIG_NSS_DRV_WIFI_MESH_ENABLE, no CONFIG_ATH11K_NSS_MESH_SUPPORT, no
+# kmod-qca-nss-drv-wifi-meshmgr — wired backhaul + usteer instead.
+
+# ath10k block removed entirely: DEVICE_PACKAGES for mx4300 in OpenWrt's own
+# ipq807x.mk never pulls in ath10k firmware (this board is ath11k-only at the
+# hardware level), so those exclusion lines did nothing for a single-device
+# build — they only matter in a shared multi-board build.
+
+################################################################################
+# 📶 Wi-Fi steering — usteer only (dawn dropped, redundant with usteer)
+################################################################################
+CONFIG_PACKAGE_luci-app-usteer=y
+
+################################################################################
+# 📈 System Monitoring Tools
+################################################################################
+CONFIG_PACKAGE_btop=y
+CONFIG_HTOP_LMSENSORS=n
+CONFIG_PACKAGE_tc-full=y
+CONFIG_PACKAGE_sqm-scripts=y
+CONFIG_PACKAGE_sqm-scripts-nss=y
+
+################################################################################
+# 🧩 Kernel Modules: Networking / Crypto / Filesystems / Virtualization
+################################################################################
+# --- Crypto
+CONFIG_PACKAGE_kmod-crypto-kpp=y
+CONFIG_PACKAGE_kmod-crypto-lib-chacha20=y
+CONFIG_PACKAGE_kmod-crypto-lib-chacha20poly1305=y
+CONFIG_PACKAGE_kmod-crypto-lib-curve25519=y
+CONFIG_PACKAGE_kmod-crypto-lib-poly1305=y
+CONFIG_PACKAGE_kmod-crypto-md5=y
+CONFIG_PACKAGE_kmod-crypto-sha1=y
+CONFIG_PACKAGE_kmod-crypto-sha256=y
+
+# --- Filesystems
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-ifb=y
+CONFIG_PACKAGE_kmod-pstore=y
+
+# --- Tunnels & Routing
+CONFIG_PACKAGE_kmod-gre6=y
+CONFIG_PACKAGE_kmod-ip-tunnel=y
+CONFIG_PACKAGE_kmod-ip6-tunnel=y
+CONFIG_PACKAGE_kmod-ip6tables-extra=y
+CONFIG_PACKAGE_kmod-ip6tables=y
+CONFIG_PACKAGE_kmod-ipt-conntrack=y
+CONFIG_PACKAGE_kmod-ipt-core=y
+CONFIG_PACKAGE_kmod-ipt-nat=y
+CONFIG_PACKAGE_kmod-iptunnel4=y
+CONFIG_PACKAGE_kmod-iptunnel6=y
+CONFIG_PACKAGE_kmod-ipvlan=y
+CONFIG_PACKAGE_kmod-nf-conncount=y
+CONFIG_PACKAGE_kmod-nf-ipt6=y
+CONFIG_PACKAGE_kmod-nf-ipt=y
+CONFIG_PACKAGE_kmod-nft-bridge=y
+CONFIG_PACKAGE_kmod-nft-compat=y
+CONFIG_PACKAGE_kmod-vxlan=y
+
+# --- Misc & Optimization
+CONFIG_PACKAGE_kmod-sched-cake=y
+CONFIG_PACKAGE_kmod-sched-core=y
+CONFIG_PACKAGE_kmod-scsi-core=y
+CONFIG_PACKAGE_kmod-tcp-bbr=y
+CONFIG_PACKAGE_kmod-tls=y
+CONFIG_PACKAGE_kmod-tun=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-wireguard=y
+
+################################################################################
+# 🧠 QCA NSS Drivers
+################################################################################
+CONFIG_NSS_DRV_GRE_ENABLE=y
+CONFIG_NSS_DRV_IGS_ENABLE=y
+CONFIG_NSS_DRV_SHAPER_ENABLE=y
+CONFIG_PACKAGE_kmod-nss-ifb=y
+CONFIG_PACKAGE_kmod-qca-mcs=y
+CONFIG_KERNEL_IP_MROUTE=y
+CONFIG_KERNEL_IPV6_MROUTE=y
+CONFIG_PACKAGE_kmod-qca-nss-drv=y
+CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-gre=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-igs=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-qdisc=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=y
+CONFIG_PACKAGE_nss-tools=y
+CONFIG_PACKAGE_luci-app-nss=y
+CONFIG_PACKAGE_nssqos=y
+CONFIG_PACKAGE_luci-app-nssqos=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-mirror=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-netlink=y
+CONFIG_PACKAGE_nssinfo=y
+CONFIG_PACKAGE_libnl-nss=y
+CONFIG_KERNEL_DEVMEM=y
+CONFIG_BUSYBOX_CUSTOM=y
+CONFIG_BUSYBOX_CONFIG_DEVMEM=y
+CONFIG_PACKAGE_kmod-ramoops=y
+
+################################################################################
+# 🌍 Networking Libraries
+################################################################################
+CONFIG_PACKAGE_libxtables=y
+CONFIG_PACKAGE_libpcap=y
+CONFIG_PACKAGE_libuv=y
+
+################################################################################
+# 🔄 ustream / uhttpd / RPCD / UBUS
+################################################################################
+CONFIG_PACKAGE_uhttpd=y
+CONFIG_PACKAGE_uhttpd-mod-ubus=y
+CONFIG_PACKAGE_rpcd=y
+CONFIG_PACKAGE_rpcd-mod-file=y
+CONFIG_PACKAGE_rpcd-mod-iwinfo=y
+CONFIG_PACKAGE_rpcd-mod-luci=y
+
+################################################################################
+# 📦 Base System Packages
+################################################################################
+CONFIG_PACKAGE_bind-dig=y
+CONFIG_PACKAGE_cgi-io=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_nano=y
+CONFIG_PACKAGE_pigz=y
+CONFIG_PACKAGE_terminfo=y
+
+################################################################################
+# 💡 Lua / Luci / Ucode
+################################################################################
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-advanced-reboot=y
+CONFIG_PACKAGE_luci-app-nssifb=y
+CONFIG_PACKAGE_luci-app-package-manager=y
+CONFIG_PACKAGE_luci-app-sqm=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-lib-base=y
+CONFIG_PACKAGE_luci-lib-ip=y
+CONFIG_PACKAGE_luci-mod-admin-full=y
+CONFIG_PACKAGE_luci-mod-network=y
+CONFIG_PACKAGE_luci-mod-status=y
+CONFIG_PACKAGE_luci-mod-status-nss=y
+CONFIG_PACKAGE_luci-mod-system=y
+CONFIG_PACKAGE_luci-proto-gre=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+CONFIG_PACKAGE_luci-proto-wireguard=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_liblucihttp=y
+CONFIG_PACKAGE_liblucihttp-ucode=y
+
+################################################################################
+# 📚 Libraries & Runtime
+################################################################################
+CONFIG_PACKAGE_libacl=y
+CONFIG_PACKAGE_libatomic=y
+CONFIG_PACKAGE_libltdl=y
+CONFIG_PACKAGE_libmbedtls=n
+CONFIG_PACKAGE_libncurses=y
+CONFIG_PACKAGE_libzstd=y
+
+################################################################################
+# 📜 Scripts / Ucode / WiFi
+################################################################################
+CONFIG_WIFI_SCRIPTS_UCODE=y
