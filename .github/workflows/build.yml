@@ -162,9 +162,7 @@ jobs:
         # same source trees; mesh needs the 11.4 firmware, which is image-wide
         # too, so it cannot share a build with the default flavour either.
         flavour: [default]
-        include:
-          - flavour: mesh
-            config_fragment: devices/common/config.mesh
+
     env:
       GH_TOKEN: ${{ github.token }}
       DEVICE: ${{ matrix.device }}
