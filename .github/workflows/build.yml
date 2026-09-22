@@ -25,16 +25,16 @@ permissions:
   contents: read
 
 env:
-  UPSTREAM_REPO: JuliusBairaktaris/openwrt-nss-edma
+  UPSTREAM_REPO: z3r09/openwrt-nss-edma
   UPSTREAM_REF: nss-edma-rework
-  NSS_REPO: JuliusBairaktaris/nss-packages
+  NSS_REPO: z3r09/nss-packages
   NSS_REF: edma-nss
   TARGET: qualcommax/ipq807x
   VARIANT: edma-nss
   RELEASE_PREFIX: edma-nss
   MESH_RELEASE_PREFIX: edma-nss-mesh
   KEEP: "2"                     # newest releases to retain, per prefix
-  FEEDS: "src-git nss https://github.com/JuliusBairaktaris/nss-packages.git;edma-nss"
+  FEEDS: "src-git nss https://github.com/z3r09/nss-packages.git;edma-nss"
 
 jobs:
   check:
